@@ -1,0 +1,10 @@
+{
+  "internal_domain": "folloze.com",
+  "manager_names": ["Luke"],
+  "manager_emails": [],
+  "doc_id": "",
+  "doc_title": "Daily Recap - Running Log",
+  "stage1_json_path": "~/Documents/daily-recap-data.json",
+  "log_path": "~/Documents/daily-recap.log",
+  "max_carryover_days": 7
+}
