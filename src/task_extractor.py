@@ -240,7 +240,7 @@ def extract_activity(
 ) -> str:
     """Extract 'What I Did Today' bullets via LLM."""
     prompt = build_activity_prompt(emails, events, granola, slack)
-    return call_llm(WHAT_I_DID_PROMPT, prompt, temperature=0.2, max_tokens=1024)
+    return call_llm(WHAT_I_DID_PROMPT, prompt, temperature=0.2, max_tokens=8192)
 
 
 def extract_waiting_on(
@@ -251,7 +251,7 @@ def extract_waiting_on(
 ) -> str:
     """Extract 'Waiting On' items via LLM."""
     prompt = build_waiting_prompt(emails, events, granola, slack)
-    return call_llm(WAITING_ON_PROMPT, prompt, temperature=0.2, max_tokens=512)
+    return call_llm(WAITING_ON_PROMPT, prompt, temperature=0.2, max_tokens=8192)
 
 
 def deduplicate_tasks(tasks: list[dict]) -> list[dict]:

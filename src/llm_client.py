@@ -12,10 +12,10 @@ from llm_gateway import LLMGateway
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_ORDER = ["local", "nvidia", "strategic"]
+FALLBACK_ORDER = ["strategic", "local", "nvidia"]  # Gemini primary; local+nvidia as fallbacks
 
 
-def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3, max_tokens: int = 4096) -> str:
+def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3, max_tokens: int = 16384) -> str:
     """Call LLM with three-tier fallback. Returns raw text response."""
     last_error = None
 
@@ -49,7 +49,7 @@ def _strip_fences(text: str) -> str:
     return text
 
 
-def call_llm_json(system_prompt: str, user_prompt: str, temperature: float = 0.1, max_tokens: int = 4096) -> list[dict]:
+def call_llm_json(system_prompt: str, user_prompt: str, temperature: float = 0.1, max_tokens: int = 32768) -> list[dict]:
     """Call LLM expecting a JSON array response. Retries once on parse failure."""
     raw = call_llm(system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens)
     cleaned = _strip_fences(raw)
