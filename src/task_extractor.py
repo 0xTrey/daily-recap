@@ -1,21 +1,16 @@
 """
 Task extractor for daily recap.
 
-Uses LLM to extract tasks from email, calendar, Granola, and Slack data.
+Uses LLM to extract tasks from email, calendar, Granola, Slack, and Google Tasks data.
 Deduplicates with rapidfuzz, prioritizes, and formats for Google Doc output.
 """
 
 import logging
-import sys
 from datetime import datetime
-from pathlib import Path
 
 from rapidfuzz import fuzz
 
-# Import format_thread_for_llm from weekly-report
-sys.path.insert(0, str(Path.home() / "weekly-report" / "src"))
-from gmail_client import format_thread_for_llm  # noqa: E402
-
+from src.gmail_fetcher import format_thread_for_llm
 from src.llm_client import call_llm, call_llm_json
 
 logger = logging.getLogger(__name__)
@@ -31,8 +26,8 @@ Categorize each task as:
 
 For each task, identify:
 - The specific action needed
-- The source (email, calendar, granola, slack)
-- A brief source detail (e.g., email subject, meeting title, channel name)
+- The source (email, calendar, granola, slack, google_tasks)
+- A brief source detail (e.g., email subject, meeting title, channel name, task list name)
 - Any source links (Gmail links, Calendar links, Granola URLs, Slack permalinks)
 - Due date if mentioned (ISO format YYYY-MM-DD), or null
 - Deal/company name if applicable, or null
@@ -91,6 +86,7 @@ def build_extraction_prompt(
     granola: dict,
     slack: dict,
     manager_names: list[str],
+    google_tasks: str = "",
 ) -> str:
     """Build the user prompt with all data sources for task extraction."""
     parts = []
@@ -128,7 +124,18 @@ def build_extraction_prompt(
         for meeting in granola["meetings"]:
             url = meeting.get("notes_url", "")
             parts.append(f"\nMeeting: {meeting['title']} ({meeting.get('date', '')}) [Link: {url}]")
-            parts.append(f"Attendees: {', '.join(meeting.get('attendees', []))}")
+            attendees = meeting.get("attendees", [])
+            if attendees:
+                # Handle both string and dict attendee formats
+                attendee_strs = []
+                for a in attendees:
+                    if isinstance(a, str):
+                        attendee_strs.append(a)
+                    elif isinstance(a, dict):
+                        name = a.get("name", "")
+                        email = a.get("email", "")
+                        attendee_strs.append(f"{name} <{email}>" if name else email)
+                parts.append(f"Attendees: {', '.join(attendee_strs)}")
             parts.append(f"Summary: {meeting.get('summary', '')}")
             if meeting.get("action_items"):
                 parts.append("Action items from notes:")
@@ -148,6 +155,12 @@ def build_extraction_prompt(
                 f"- [{msg.get('channel', '')}] {who}: {msg.get('text', '')} "
                 f"({msg.get('timestamp', '')}) [Link: {link}]"
             )
+        parts.append("")
+
+    # Google Tasks
+    if google_tasks:
+        parts.append("=== GOOGLE TASKS ===")
+        parts.append(google_tasks)
         parts.append("")
 
     parts.append(TASK_SCHEMA_EXAMPLE)
@@ -196,7 +209,6 @@ def build_waiting_prompt(
     slack: dict,
 ) -> str:
     """Build prompt for 'Waiting On' section."""
-    # Same data, different lens
     return build_activity_prompt(emails, events, granola, slack)
 
 
@@ -206,9 +218,10 @@ def extract_tasks(
     granola: dict,
     slack: dict,
     manager_names: list[str],
+    google_tasks: str = "",
 ) -> list[dict]:
     """Extract tasks from all data sources via LLM."""
-    prompt = build_extraction_prompt(emails, events, granola, slack, manager_names)
+    prompt = build_extraction_prompt(emails, events, granola, slack, manager_names, google_tasks)
     tasks = call_llm_json(SYSTEM_PROMPT, prompt)
 
     # Validate and normalize
@@ -270,12 +283,10 @@ def deduplicate_tasks(tasks: list[dict]) -> list[dict]:
             if score >= 85:
                 # Merge: keep the one with more source links
                 if len(task.get("source_links", [])) > len(existing.get("source_links", [])):
-                    # Merge source links from existing into task
                     merged_links = list(set(task["source_links"] + existing.get("source_links", [])))
                     task["source_links"] = merged_links
                     deduped[i] = task
                 else:
-                    # Merge source links from task into existing
                     merged_links = list(set(existing.get("source_links", []) + task.get("source_links", [])))
                     deduped[i]["source_links"] = merged_links
                 is_dup = True
@@ -307,7 +318,6 @@ def _sort_key(task: dict) -> tuple:
         has_due = 1
         due_sort = "9999-99-99"
 
-    # Urgency keywords for undated external tasks
     urgency = 1
     task_lower = task.get("task", "").lower()
     if any(kw in task_lower for kw in ("today", "asap", "eod", "urgent", "immediately")):
@@ -324,11 +334,13 @@ def format_tasks_for_doc(
     activity_text: str,
     waiting_text: str,
     today: datetime,
+    companies_text: str = "",
+    overdue_safety_net: list[dict] | None = None,
 ) -> str:
     """
     Format all extracted data into the daily section markdown for the Google Doc.
 
-    Output format matches the spec:
+    Output format:
     ## YYYY-MM-DD - Daily Recap
     ### What I Did Today
     ### What Needs Doing
@@ -336,6 +348,7 @@ def format_tasks_for_doc(
     #### Internal
     #### External
     ### Waiting On
+    ### Companies Engaged
     ### Carried Forward
     """
     date_str = today.strftime("%Y-%m-%d")
@@ -359,31 +372,21 @@ def format_tasks_for_doc(
     lines.append("### What Needs Doing")
     lines.append("")
 
-    # Sort tasks
     sorted_tasks = sorted(tasks, key=_sort_key)
 
-    # Group by category
     luke_tasks = [t for t in sorted_tasks if t["category"] == "luke"]
     internal_tasks = [t for t in sorted_tasks if t["category"] == "internal"]
     external_tasks = [t for t in sorted_tasks if t["category"] == "external"]
 
     def format_task_line(task: dict) -> str:
-        """Format a single task as a checkbox line with source attribution."""
         parts = [f"[ ] {task['task']}"]
-
-        # Add due date if present
         if task.get("due_date"):
             parts[0] += f" (by {task['due_date']})"
-
-        # Add deal name if present
         if task.get("deal_name"):
             parts[0] += f" - {task['deal_name']}"
-
-        # Source attribution
         source = task.get("source", "")
         if source:
             parts[0] += f" ({source})"
-
         return parts[0]
 
     if luke_tasks:
@@ -408,6 +411,25 @@ def format_tasks_for_doc(
         lines.append("No tasks extracted.")
         lines.append("")
 
+    # Safety net: overdue Google Tasks the LLM may have missed
+    if overdue_safety_net:
+        # Check which overdue tasks are already covered by LLM-extracted tasks
+        extracted_titles = {t["task"].lower() for t in tasks}
+        uncovered = []
+        for ot in overdue_safety_net:
+            title_lower = ot.get("title", "").lower()
+            # Simple check: if no extracted task contains this title
+            if not any(title_lower in et for et in extracted_titles):
+                uncovered.append(ot)
+
+        if uncovered:
+            lines.append("#### Overdue (Google Tasks)")
+            for ot in uncovered:
+                due = ot.get("due", "")[:10]
+                list_name = ot.get("list_title", "")
+                lines.append(f"[ ] {ot['title']} (by {due}) - {list_name} (google_tasks, overdue)")
+            lines.append("")
+
     # Waiting On
     lines.append("### Waiting On")
     if waiting_text and waiting_text.strip() and waiting_text.strip().lower() != "none":
@@ -419,13 +441,18 @@ def format_tasks_for_doc(
         lines.append("- Nothing pending")
     lines.append("")
 
+    # Companies Engaged
+    if companies_text:
+        lines.append("### Companies Engaged")
+        lines.append(companies_text)
+        lines.append("")
+
     # Carried Forward
     if carryover:
         lines.append("### Carried Forward")
         for item in carryover:
             carried_date = item["original_date"]
             task_text = item["task"]
-            # Don't double-add the carried-from tag
             if f"[Carried from {carried_date}]" not in task_text:
                 lines.append(f"[ ] [Carried from {carried_date}] {task_text}")
             else:

@@ -35,15 +35,13 @@ class TestHelpers(unittest.TestCase):
 
 
 class TestFetchAllEvents(unittest.TestCase):
-    @patch("src.calendar_fetcher.build")
-    @patch("src.calendar_fetcher._get_credentials")
+    @patch("src.calendar_fetcher.build_service")
     @patch("src.calendar_fetcher._load_settings")
-    def test_skips_allday_events(self, mock_settings, mock_creds, mock_build):
+    def test_skips_allday_events(self, mock_settings, mock_build_service):
         mock_settings.return_value = {"internal_domain": "folloze.com"}
-        mock_creds.return_value = MagicMock()
 
         mock_service = MagicMock()
-        mock_build.return_value = mock_service
+        mock_build_service.return_value = mock_service
         mock_service.events.return_value.list.return_value.execute.return_value = {
             "items": [
                 {
@@ -73,15 +71,13 @@ class TestFetchAllEvents(unittest.TestCase):
         self.assertTrue(results[0]["is_internal"])
         self.assertEqual(results[0]["html_link"], "https://calendar.google.com/event/123")
 
-    @patch("src.calendar_fetcher.build")
-    @patch("src.calendar_fetcher._get_credentials")
+    @patch("src.calendar_fetcher.build_service")
     @patch("src.calendar_fetcher._load_settings")
-    def test_tags_external_events(self, mock_settings, mock_creds, mock_build):
+    def test_tags_external_events(self, mock_settings, mock_build_service):
         mock_settings.return_value = {"internal_domain": "folloze.com"}
-        mock_creds.return_value = MagicMock()
 
         mock_service = MagicMock()
-        mock_build.return_value = mock_service
+        mock_build_service.return_value = mock_service
         mock_service.events.return_value.list.return_value.execute.return_value = {
             "items": [
                 {

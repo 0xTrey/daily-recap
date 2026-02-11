@@ -35,10 +35,16 @@ class TestExtractCarryoverTasks(unittest.TestCase):
         self.assertEqual(tasks[1]["task"], "Follow up with Gamma (slack)")
 
     def test_preserves_carried_from_date(self):
-        full_text = """## 2026-02-04 - Daily Recap
+        # Use yesterday's date so the carried task is within the 7-day window
+        from datetime import timedelta
+        yesterday = datetime.now() - timedelta(days=1)
+        recap_date = yesterday.strftime("%Y-%m-%d")
+        recap_mm_dd = yesterday.strftime("%m/%d")
+        two_days_ago = (datetime.now() - timedelta(days=2)).strftime("%m/%d")
+        full_text = f"""## {recap_date} - Daily Recap
 
 ### Carried Forward
-[ ] [Carried from 02/02] Prepare board deck (email)
+[ ] [Carried from {two_days_ago}] Prepare board deck (email)
 [ ] New task today (slack)
 """
         tasks = extract_carryover_tasks(full_text)
@@ -46,7 +52,7 @@ class TestExtractCarryoverTasks(unittest.TestCase):
         # The carried-from task keeps its original date
         carried = [t for t in tasks if "board deck" in t["task"]]
         self.assertEqual(len(carried), 1)
-        self.assertEqual(carried[0]["original_date"], "02/02")
+        self.assertEqual(carried[0]["original_date"], two_days_ago)
 
     def test_empty_doc(self):
         tasks = extract_carryover_tasks("")

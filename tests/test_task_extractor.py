@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime
 
-from src.task_extractor import deduplicate_tasks, format_tasks_for_doc, _sort_key
+from src.task_extractor import deduplicate_tasks, format_tasks_for_doc, _sort_key, build_extraction_prompt
 
 
 class TestDeduplicateTasks(unittest.TestCase):
@@ -54,6 +54,32 @@ class TestSortKey(unittest.TestCase):
         early = {"task": "Do X", "category": "external", "due_date": "2026-02-06"}
         late = {"task": "Do Y", "category": "external", "due_date": "2026-02-10"}
         self.assertLess(_sort_key(early), _sort_key(late))
+
+
+class TestBuildExtractionPrompt(unittest.TestCase):
+    def test_includes_google_tasks_section(self):
+        google_tasks = "OVERDUE:\n- Complete review (due 2026-02-08, list: Work)"
+        result = build_extraction_prompt([], [], {}, {}, ["Luke"], google_tasks=google_tasks)
+        self.assertIn("=== GOOGLE TASKS ===", result)
+        self.assertIn("Complete review", result)
+
+    def test_no_google_tasks_when_empty(self):
+        result = build_extraction_prompt([], [], {}, {}, ["Luke"], google_tasks="")
+        self.assertNotIn("GOOGLE TASKS", result)
+
+    def test_handles_dict_attendees_in_granola(self):
+        granola = {
+            "meetings": [{
+                "title": "Test Meeting",
+                "date": "2026-02-10",
+                "notes_url": "",
+                "summary": "Test",
+                "attendees": [{"name": "Jane", "email": "jane@acme.com"}],
+                "action_items": [],
+            }]
+        }
+        result = build_extraction_prompt([], [], granola, {}, ["Luke"])
+        self.assertIn("Jane <jane@acme.com>", result)
 
 
 class TestFormatTasksForDoc(unittest.TestCase):
@@ -110,6 +136,55 @@ class TestFormatTasksForDoc(unittest.TestCase):
         today = datetime(2026, 2, 5)
         result = format_tasks_for_doc([], [], "- Did stuff", "None", today)
         self.assertNotIn("Carried Forward", result)
+
+    def test_companies_section(self):
+        today = datetime(2026, 2, 5)
+        result = format_tasks_for_doc(
+            [], [], "- Did stuff", "None", today,
+            companies_text="- acme.com (5 interactions)\n- beta.io (2 interactions)",
+        )
+        self.assertIn("### Companies Engaged", result)
+        self.assertIn("acme.com (5 interactions)", result)
+
+    def test_no_companies_section_when_empty(self):
+        today = datetime(2026, 2, 5)
+        result = format_tasks_for_doc([], [], "- Did stuff", "None", today, companies_text="")
+        self.assertNotIn("Companies Engaged", result)
+
+    def test_overdue_safety_net(self):
+        today = datetime(2026, 2, 5)
+        overdue = [
+            {"title": "Complete annual review", "due": "2026-02-03T00:00:00.000Z", "list_title": "Work"}
+        ]
+        result = format_tasks_for_doc(
+            [], [], "- Did stuff", "None", today,
+            overdue_safety_net=overdue,
+        )
+        self.assertIn("#### Overdue (Google Tasks)", result)
+        self.assertIn("Complete annual review", result)
+        self.assertIn("google_tasks, overdue", result)
+
+    def test_overdue_safety_net_skips_covered(self):
+        today = datetime(2026, 2, 5)
+        tasks = [
+            {
+                "task": "Complete annual review by Friday",
+                "category": "internal",
+                "source": "google_tasks",
+                "due_date": "2026-02-03",
+                "deal_name": None,
+                "status": "open",
+            }
+        ]
+        overdue = [
+            {"title": "complete annual review", "due": "2026-02-03T00:00:00.000Z", "list_title": "Work"}
+        ]
+        result = format_tasks_for_doc(
+            tasks, [], "- Did stuff", "None", today,
+            overdue_safety_net=overdue,
+        )
+        # The overdue safety net section should NOT appear because the LLM already extracted it
+        self.assertNotIn("#### Overdue (Google Tasks)", result)
 
 
 if __name__ == "__main__":

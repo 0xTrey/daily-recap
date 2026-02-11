@@ -10,8 +10,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from google_workspace.auth import build_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +21,6 @@ def _load_settings() -> dict:
     settings_path = PROJECT_ROOT / "config" / "settings.json"
     with open(settings_path) as f:
         return json.load(f)
-
-
-def _get_credentials() -> Credentials:
-    token_path = PROJECT_ROOT / "token.json"
-    if not token_path.exists():
-        raise FileNotFoundError("token.json not found. Run setup_google_auth.py first.")
-    return Credentials.from_authorized_user_file(str(token_path))
 
 
 def _extract_domain(email: str) -> str:
@@ -65,8 +57,7 @@ def fetch_all_events(start: datetime, end: datetime) -> list[dict]:
     settings = _load_settings()
     internal_domain = settings.get("internal_domain", "folloze.com")
 
-    creds = _get_credentials()
-    service = build("calendar", "v3", credentials=creds)
+    service = build_service("calendar", "v3")
 
     time_min = start.isoformat() + "Z" if not start.tzinfo else start.isoformat()
     time_max = end.isoformat() + "Z" if not end.tzinfo else end.isoformat()

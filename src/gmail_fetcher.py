@@ -2,33 +2,112 @@
 Gmail fetcher for daily recap.
 
 Fetches ALL inbox threads (not domain-filtered) and classifies reply status.
-Reuses extract_body_text() from weekly-report for MIME parsing.
+Uses google-workspace for auth and includes vendored MIME parsing functions.
 """
 
+import base64
 import logging
-import sys
+import re
 from datetime import datetime
 from email.utils import parseaddr
 from pathlib import Path
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-
-# Import extract_body_text from weekly-report
-sys.path.insert(0, str(Path.home() / "weekly-report" / "src"))
-from gmail_client import extract_body_text, format_thread_for_llm  # noqa: E402
+from google_workspace.auth import build_service
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
-def _get_credentials() -> Credentials:
-    token_path = PROJECT_ROOT / "token.json"
-    if not token_path.exists():
-        raise FileNotFoundError("token.json not found. Run setup_google_auth.py first.")
-    return Credentials.from_authorized_user_file(str(token_path))
+# ---------------------------------------------------------------------------
+# Vendored from weekly-report/src/gmail_client.py
+# Copied here to remove the fragile sys.path.insert dependency.
+# ---------------------------------------------------------------------------
 
+def _clean_body_text(text: str) -> str:
+    """Strip email noise: quoted replies, signatures, legal disclaimers."""
+    lines = text.split("\n")
+    cleaned = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped in ("-- ", "--") or stripped.startswith(
+            ("Sent from my", "CONFIDENTIAL", "This email and any")
+        ):
+            break
+        if stripped.startswith(">"):
+            continue
+        cleaned.append(line)
+
+    result = "\n".join(cleaned).strip()
+    result = re.sub(r"\n{3,}", "\n\n", result)
+
+    if len(result) > 2000:
+        result = result[:2000]
+
+    return result
+
+
+def extract_body_text(payload: dict) -> str:
+    """Extract plain text body from email payload. Handles multipart recursively."""
+    body_text = ""
+
+    mime_type = payload.get("mimeType", "")
+    body = payload.get("body", {})
+    parts = payload.get("parts", [])
+
+    if mime_type == "text/plain" and body.get("data"):
+        body_text = base64.urlsafe_b64decode(body["data"]).decode(
+            "utf-8", errors="ignore"
+        )
+    elif parts:
+        for part in parts:
+            part_mime = part.get("mimeType", "")
+            if part_mime == "text/plain":
+                part_body = part.get("body", {})
+                if part_body.get("data"):
+                    body_text = base64.urlsafe_b64decode(part_body["data"]).decode(
+                        "utf-8", errors="ignore"
+                    )
+                    break
+            elif part_mime.startswith("multipart/"):
+                body_text = extract_body_text(part)
+                if body_text:
+                    break
+
+    body_text = body_text.strip()
+    body_text = _clean_body_text(body_text)
+    return body_text
+
+
+def format_thread_for_llm(thread: dict) -> str:
+    """Format a thread for LLM consumption. Labels messages YOU/THEY."""
+    lines = [f"Subject: {thread['subject']}", ""]
+
+    messages = thread["messages"]
+
+    if len(messages) > 4:
+        kept = [messages[0]] + messages[-2:]
+        omitted = len(messages) - 3
+    else:
+        kept = messages
+        omitted = 0
+
+    for i, msg in enumerate(kept):
+        if omitted and i == 1:
+            lines.append(f"[... {omitted} earlier messages omitted ...]")
+            lines.append("")
+        label = "YOU wrote:" if msg["is_you"] else "THEY wrote:"
+        lines.append(f"--- {label} ({msg['timestamp']}) ---")
+        lines.append(msg["body"])
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Gmail fetching logic
+# ---------------------------------------------------------------------------
 
 def _get_user_email(service) -> str:
     profile = service.users().getProfile(userId="me").execute()
@@ -43,8 +122,7 @@ def fetch_inbox_threads(start: datetime, end: datetime) -> list[dict]:
     - thread_id, subject, messages (list), message_count
     Each message has: sender, sender_email, body, timestamp, is_you, message_id, label_ids
     """
-    creds = _get_credentials()
-    service = build("gmail", "v1", credentials=creds)
+    service = build_service("gmail", "v1")
     user_email = _get_user_email(service)
     user_domain = user_email.split("@")[1] if "@" in user_email else ""
 
@@ -76,7 +154,6 @@ def fetch_inbox_threads(start: datetime, end: datetime) -> list[dict]:
 
     logger.info(f"Found {len(all_message_refs)} messages in inbox")
 
-    # Group messages by thread
     threads: dict[str, dict] = {}
 
     for msg_ref in all_message_refs:
@@ -132,7 +209,6 @@ def fetch_inbox_threads(start: datetime, end: datetime) -> list[dict]:
         })
         threads[thread_id]["label_ids"].update(label_ids)
 
-    # Sort messages within each thread and convert label_ids set to list
     for thread in threads.values():
         thread["messages"].sort(key=lambda m: m["timestamp"])
         thread["label_ids"] = list(thread["label_ids"])
@@ -153,7 +229,6 @@ def classify_thread(thread: dict, user_email: str) -> dict:
     - gmail_link: str
     """
     has_unread = "UNREAD" in thread.get("label_ids", [])
-    user_domain = user_email.split("@")[1] if "@" in user_email else ""
 
     user_messages = [m for m in thread["messages"] if m["is_you"]]
     has_user_reply = len(user_messages) > 0
@@ -166,7 +241,6 @@ def classify_thread(thread: dict, user_email: str) -> dict:
     else:
         thread["status"] = "read_no_reply"
 
-    # Build Gmail permalink from first message ID
     first_msg_id = thread["messages"][0]["message_id"] if thread["messages"] else ""
     thread["gmail_link"] = f"https://mail.google.com/mail/u/0/#inbox/{first_msg_id}"
 
@@ -175,8 +249,7 @@ def classify_thread(thread: dict, user_email: str) -> dict:
 
 def fetch_and_classify(start: datetime, end: datetime) -> list[dict]:
     """Fetch inbox threads and classify each one."""
-    creds = _get_credentials()
-    service = build("gmail", "v1", credentials=creds)
+    service = build_service("gmail", "v1")
     user_email = _get_user_email(service)
 
     threads = fetch_inbox_threads(start, end)

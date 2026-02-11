@@ -11,8 +11,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from google_workspace.auth import build_service
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +34,6 @@ def _save_settings(settings: dict):
         json.dump(settings, f, indent=2)
 
 
-def _get_credentials() -> Credentials:
-    token_path = PROJECT_ROOT / "token.json"
-    if not token_path.exists():
-        raise FileNotFoundError("token.json not found. Run setup_google_auth.py first.")
-    return Credentials.from_authorized_user_file(str(token_path))
-
-
 def get_or_create_doc() -> tuple[str, str]:
     """
     Get existing doc or create a new one.
@@ -51,8 +43,7 @@ def get_or_create_doc() -> tuple[str, str]:
     doc_id = settings.get("doc_id", "")
     doc_title = settings.get("doc_title", "Daily Recap - Running Log")
 
-    creds = _get_credentials()
-    docs_service = build("docs", "v1", credentials=creds)
+    docs_service = build_service("docs", "v1")
 
     if doc_id:
         try:
@@ -80,8 +71,7 @@ def read_doc_body(doc_id: str) -> tuple[str, list[dict]]:
     Read the full doc body.
     Returns (full_text, structural_elements).
     """
-    creds = _get_credentials()
-    docs_service = build("docs", "v1", credentials=creds)
+    docs_service = build_service("docs", "v1")
     doc = docs_service.documents().get(documentId=doc_id).execute()
 
     elements = doc.get("body", {}).get("content", [])
@@ -345,8 +335,7 @@ def prepend_daily_section(doc_id: str, section_text: str) -> None:
         logger.warning("No requests to send to Google Docs")
         return
 
-    creds = _get_credentials()
-    docs_service = build("docs", "v1", credentials=creds)
+    docs_service = build_service("docs", "v1")
 
     docs_service.documents().batchUpdate(
         documentId=doc_id,
