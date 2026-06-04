@@ -16,7 +16,7 @@ class TestMergeAttendees(unittest.TestCase):
         self.assertTrue(all(isinstance(a, dict) for a in result))
 
     def test_stage1_extras_added(self):
-        stage1 = ["jane@acme.com", "extra@other.com"]
+        stage1 = ["jane@acme.com", "extra@example.com"]
         digest = [{"name": "Jane", "email": "jane@acme.com"}]
         result = _merge_attendees(stage1, digest)
         self.assertEqual(len(result), 2)
