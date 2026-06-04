@@ -50,14 +50,14 @@ class TestExtractCompanies(unittest.TestCase):
 
     def test_from_calendar(self):
         events = [
-            {"attendees": ["me@folloze.com", "client@beta.io", "partner@beta.io"]}
+            {"attendees": ["me@folloze.com", "client@example.com", "partner@example.com"]}
         ]
         result = extract_companies([], events, {}, {})
         self.assertEqual(result.get("beta.io"), 2)
         self.assertNotIn("folloze.com", result)
 
     def test_filters_personal_domains(self):
-        emails = [{"messages": [{"sender_email": "friend@gmail.com"}]}]
+        emails = [{"messages": [{"sender_email": "friend@example.com"}]}]
         result = extract_companies(emails, [], {}, {})
         self.assertNotIn("gmail.com", result)
 
@@ -74,10 +74,10 @@ class TestExtractCompanies(unittest.TestCase):
         emails = [
             {
                 "messages": [
-                    {"sender_email": "a@alpha.com"},
-                    {"sender_email": "b@beta.com"},
-                    {"sender_email": "c@beta.com"},
-                    {"sender_email": "d@beta.com"},
+                    {"sender_email": "a@example.com"},
+                    {"sender_email": "b@example.com"},
+                    {"sender_email": "c@example.com"},
+                    {"sender_email": "d@example.com"},
                 ]
             }
         ]
